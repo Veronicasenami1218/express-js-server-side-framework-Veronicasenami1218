@@ -126,10 +126,33 @@ app.get('/', (req, res) => {
     if (!valid) return next(new ValidationError('Invalid payload', { errors }));
     next();
   }
-
+  
 // GET /api/products - List all products
 app.get('/api/products', (req, res) => {
-  res.json(products);
+  const { category, page = '1', limit = '10' } = req.query;
+  let data = products;
+
+  // Filter by category if provided
+  if (typeof category === 'string' && category.trim() !== '') {
+    const cat = category.trim().toLowerCase();
+    data = data.filter((p) => String(p.category).toLowerCase() === cat);
+  }
+
+  // Pagination
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+  const limitNum = Math.max(parseInt(limit, 10) || 10, 1);
+  const total = data.length;
+  const totalPages = Math.max(Math.ceil(total / limitNum), 1);
+  const start = (pageNum - 1) * limitNum;
+  const paged = data.slice(start, start + limitNum);
+
+  res.json({
+    total,
+    page: pageNum,
+    limit: limitNum,
+    totalPages,
+    data: paged,
+  });
 });
 // GET /api/products/:id - Get a specific product by ID
 app.get('/api/products/:id', (req, res, next) => {
@@ -141,6 +164,25 @@ app.get('/api/products/:id', (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// GET /api/products/search?name=... - Search products by name (case-insensitive, substring)
+app.get('/api/products/search', (req, res) => {
+  const { name = '' } = req.query;
+  const q = String(name).trim().toLowerCase();
+  if (!q) return res.json([]);
+  const matches = products.filter((p) => String(p.name).toLowerCase().includes(q));
+  res.json(matches);
+});
+
+// GET /api/products/stats - Product statistics (e.g., count by category)
+app.get('/api/products/stats', (req, res) => {
+  const counts = products.reduce((acc, p) => {
+    const key = String(p.category || 'uncategorized').toLowerCase();
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  res.json({ countByCategory: counts, total: products.length });
 });
 
 // POST /api/products - Create a new product
