@@ -5,6 +5,32 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const { v4: uuidv4 } = require('uuid');
 
+// Custom error classes
+class ApiError extends Error {
+  constructor(statusCode, message, details = undefined) {
+    super(message);
+    this.name = this.constructor.name;
+    this.statusCode = statusCode || 500;
+    this.details = details;
+    Error.captureStackTrace?.(this, this.constructor);
+  }
+}
+
+class NotFoundError extends ApiError {
+  constructor(message = 'Resource not found', details) {
+    super(404, message, details);
+  }
+}
+
+class ValidationError extends ApiError {
+  constructor(message = 'Validation failed', details) {
+    super(400, message, details);
+  }
+}
+
+// Async wrapper utility (for future async handlers)
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 // Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -57,7 +83,7 @@ app.get('/', (req, res) => {
     const apiKey = req.header('x-api-key');
     const expected = process.env.API_KEY || 'dev-secret-key';
     if (!apiKey || apiKey !== expected) {
-      return res.status(401).json({ message: 'Unauthorized: invalid or missing API key' });
+      return next(new ApiError(401, 'Unauthorized: invalid or missing API key'));
     }
     next();
   }
@@ -91,13 +117,13 @@ app.get('/', (req, res) => {
   // Validation middleware
   function validateCreate(req, res, next) {
     const { valid, errors } = validateProductPayload(req.body, true);
-    if (!valid) return res.status(400).json({ message: 'Invalid payload', errors });
+    if (!valid) return next(new ValidationError('Invalid payload', { errors }));
     next();
   }
 
   function validateUpdate(req, res, next) {
     const { valid, errors } = validateProductPayload(req.body, true);
-    if (!valid) return res.status(400).json({ message: 'Invalid payload', errors });
+    if (!valid) return next(new ValidationError('Invalid payload', { errors }));
     next();
   }
 
@@ -106,53 +132,89 @@ app.get('/api/products', (req, res) => {
   res.json(products);
 });
 // GET /api/products/:id - Get a specific product by ID
-app.get('/api/products/:id', (req, res) => {
-  const { id } = req.params;
-  const product = products.find((p) => p.id === id);
-  if (!product) return res.status(404).json({ message: 'Product not found' });
-  res.json(product);
+app.get('/api/products/:id', (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const product = products.find((p) => p.id === id);
+    if (!product) return next(new NotFoundError('Product not found'));
+    res.json(product);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // POST /api/products - Create a new product
-app.post('/api/products', requireApiKey, validateCreate, (req, res) => {
-  const { name, description, price, category, inStock } = req.body;
-  const newProduct = {
-    id: uuidv4(),
-    name: name.trim(),
-    description: description.trim(),
-    price,
-    category: category.trim(),
-    inStock
-  };
-  products.push(newProduct);
-  res.status(201).json(newProduct);
+app.post('/api/products', requireApiKey, validateCreate, (req, res, next) => {
+  try {
+    const { name, description, price, category, inStock } = req.body;
+    const newProduct = {
+      id: uuidv4(),
+      name: name.trim(),
+      description: description.trim(),
+      price,
+      category: category.trim(),
+      inStock
+    };
+    products.push(newProduct);
+    res.status(201).json(newProduct);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // PUT /api/products/:id - Update an existing product
-app.put('/api/products/:id', requireApiKey, validateUpdate, (req, res) => {
-  const { id } = req.params;
-  const index = products.findIndex((p) => p.id === id);
-  if (index === -1) return res.status(404).json({ message: 'Product not found' });
-  const { name, description, price, category, inStock } = req.body;
-  const updated = {
-    id,
-    name: name.trim(),
-    description: description.trim(),
-    price,
-    category: category.trim(),
-    inStock
-  };
-  products[index] = updated;
-  res.json(updated);
+app.put('/api/products/:id', requireApiKey, validateUpdate, (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const index = products.findIndex((p) => p.id === id);
+    if (index === -1) return next(new NotFoundError('Product not found'));
+    const { name, description, price, category, inStock } = req.body;
+    const updated = {
+      id,
+      name: name.trim(),
+      description: description.trim(),
+      price,
+      category: category.trim(),
+      inStock
+    };
+    products[index] = updated;
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // DELETE /api/products/:id - Delete a product
-app.delete('/api/products/:id', requireApiKey, (req, res) => {
-  const { id } = req.params;
-  const index = products.findIndex((p) => p.id === id);
-  if (index === -1) return res.status(404).json({ message: 'Product not found' });
-  products.splice(index, 1);
-  res.status(204).send();
+app.delete('/api/products/:id', requireApiKey, (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const index = products.findIndex((p) => p.id === id);
+    if (index === -1) return next(new NotFoundError('Product not found'));
+    products.splice(index, 1);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// 404 handler for unmatched routes
+app.use((req, res, next) => {
+  next(new NotFoundError('Route not found'));
+});
+
+// Global error handler (must be last)
+/* eslint-disable no-unused-vars */
+app.use((err, req, res, next) => {
+  const status = err?.statusCode || 500;
+  const payload = {
+    message: err?.message || 'Internal Server Error',
+  };
+  if (err?.details) payload.details = err.details;
+  // Basic stack in development for easier debugging
+  if (process.env.NODE_ENV !== 'production' && err?.stack) {
+    payload.stack = err.stack;
+  }
+  res.status(status).json(payload);
 });
 
 // Start the server
