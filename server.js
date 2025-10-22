@@ -41,41 +41,70 @@ let products = [
 
 // Root route
 app.get('/', (req, res) => {
-  res.send('Hello World');
-});
+    res.send('Hello World');
+  });
 
-// Simple payload validation helper
-const isString = (v) => typeof v === 'string' && v.trim() !== '';
-const isNumber = (v) => typeof v === 'number' && !Number.isNaN(v);
-const isBoolean = (v) => typeof v === 'boolean';
+  // Logger middleware (method, URL, timestamp)
+  function logger(req, res, next) {
+    const ts = new Date().toISOString();
+    console.log(`[${ts}] ${req.method} ${req.originalUrl}`);
+    next();
+  }
+  app.use(logger);
 
-function validateProductPayload(body, requireAll = true) {
-  const errors = [];
-  const { name, description, price, category, inStock } = body ?? {};
-  if (requireAll || 'name' in body) {
-    if (!isString(name)) errors.push('name must be a non-empty string');
-  }
-  if (requireAll || 'description' in body) {
-    if (!isString(description)) errors.push('description must be a non-empty string');
-  }
-  if (requireAll || 'price' in body) {
-    if (!isNumber(price)) errors.push('price must be a number');
-  }
-  if (requireAll || 'category' in body) {
-    if (!isString(category)) errors.push('category must be a non-empty string');
-  }
-  if (requireAll || 'inStock' in body) {
-    if (!isBoolean(inStock)) errors.push('inStock must be a boolean');
+  // Authentication middleware via x-api-key header
+  function requireApiKey(req, res, next) {
+    const apiKey = req.header('x-api-key');
+    const expected = process.env.API_KEY || 'dev-secret-key';
+    if (!apiKey || apiKey !== expected) {
+      return res.status(401).json({ message: 'Unauthorized: invalid or missing API key' });
+    }
+    next();
   }
 
-  return { valid: errors.length === 0, errors };
-}
+  // Validation helpers and function
+  const isString = (v) => typeof v === 'string' && v.trim() !== '';
+  const isNumber = (v) => typeof v === 'number' && !Number.isNaN(v);
+  const isBoolean = (v) => typeof v === 'boolean';
+
+  function validateProductPayload(body, requireAll = true) {
+    const errors = [];
+    const { name, description, price, category, inStock } = body ?? {};
+    if (requireAll || 'name' in body) {
+      if (!isString(name)) errors.push('name must be a non-empty string');
+    }
+    if (requireAll || 'description' in body) {
+      if (!isString(description)) errors.push('description must be a non-empty string');
+    }
+    if (requireAll || 'price' in body) {
+      if (!isNumber(price)) errors.push('price must be a number');
+    }
+    if (requireAll || 'category' in body) {
+      if (!isString(category)) errors.push('category must be a non-empty string');
+    }
+    if (requireAll || 'inStock' in body) {
+      if (!isBoolean(inStock)) errors.push('inStock must be a boolean');
+    }
+    return { valid: errors.length === 0, errors };
+  }
+
+  // Validation middleware
+  function validateCreate(req, res, next) {
+    const { valid, errors } = validateProductPayload(req.body, true);
+    if (!valid) return res.status(400).json({ message: 'Invalid payload', errors });
+    next();
+  }
+
+  function validateUpdate(req, res, next) {
+    const { valid, errors } = validateProductPayload(req.body, true);
+    if (!valid) return res.status(400).json({ message: 'Invalid payload', errors });
+    next();
+  }
 
 // GET /api/products - List all products
 app.get('/api/products', (req, res) => {
   res.json(products);
 });
-
 // GET /api/products/:id - Get a specific product by ID
 app.get('/api/products/:id', (req, res) => {
   const { id } = req.params;
@@ -85,10 +114,7 @@ app.get('/api/products/:id', (req, res) => {
 });
 
 // POST /api/products - Create a new product
-app.post('/api/products', (req, res) => {
-  const { valid, errors } = validateProductPayload(req.body, true);
-  if (!valid) return res.status(400).json({ message: 'Invalid payload', errors });
-
+app.post('/api/products', requireApiKey, validateCreate, (req, res) => {
   const { name, description, price, category, inStock } = req.body;
   const newProduct = {
     id: uuidv4(),
@@ -103,14 +129,10 @@ app.post('/api/products', (req, res) => {
 });
 
 // PUT /api/products/:id - Update an existing product
-app.put('/api/products/:id', (req, res) => {
+app.put('/api/products/:id', requireApiKey, validateUpdate, (req, res) => {
   const { id } = req.params;
   const index = products.findIndex((p) => p.id === id);
   if (index === -1) return res.status(404).json({ message: 'Product not found' });
-
-  const { valid, errors } = validateProductPayload(req.body, true);
-  if (!valid) return res.status(400).json({ message: 'Invalid payload', errors });
-
   const { name, description, price, category, inStock } = req.body;
   const updated = {
     id,
@@ -125,7 +147,7 @@ app.put('/api/products/:id', (req, res) => {
 });
 
 // DELETE /api/products/:id - Delete a product
-app.delete('/api/products/:id', (req, res) => {
+app.delete('/api/products/:id', requireApiKey, (req, res) => {
   const { id } = req.params;
   const index = products.findIndex((p) => p.id === id);
   if (index === -1) return res.status(404).json({ message: 'Product not found' });
